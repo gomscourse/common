@@ -6,11 +6,11 @@ import (
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/gomscourse/common/pkg/db"
 	"github.com/gomscourse/common/pkg/db/prettier"
+	"github.com/gomscourse/common/pkg/tools"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"log"
-	"time"
 )
 
 const TxKey = "tx"
@@ -48,36 +48,61 @@ func (p pg) ScanAllContext(ctx context.Context, dest interface{}, q db.Query, ar
 func (p pg) ExecContext(ctx context.Context, q db.Query, args ...interface{}) (pgconn.CommandTag, error) {
 	logQuery(ctx, q, args...)
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
-
-	tx, ok := ctx.Value(TxKey).(pgx.Tx)
-	if ok {
-		return tx.Exec(ctx, q.QueryRow, args...)
+	type resultPair struct {
+		tag pgconn.CommandTag
+		err error
 	}
+	ch := make(chan resultPair, 1)
 
-	return p.dbc.Exec(ctx, q.QueryRow, args...)
+	go func() {
+		tx, ok := ctx.Value(TxKey).(pgx.Tx)
+		if ok {
+			tag, err := tx.Exec(ctx, q.QueryRow, args...)
+			ch <- resultPair{tag: tag, err: err}
+		}
+
+		tag, err := p.dbc.Exec(ctx, q.QueryRow, args...)
+		ch <- resultPair{tag: tag, err: err}
+	}()
+
+	select {
+	case res := <-ch:
+		return res.tag, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (p pg) QueryContext(ctx context.Context, q db.Query, args ...interface{}) (pgx.Rows, error) {
 	logQuery(ctx, q, args...)
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
-
-	tx, ok := ctx.Value(TxKey).(pgx.Tx)
-	if ok {
-		return tx.Query(ctx, q.QueryRow, args...)
+	type resultPair struct {
+		rows pgx.Rows
+		err  error
 	}
+	ch := make(chan resultPair, 1)
 
-	return p.dbc.Query(ctx, q.QueryRow, args...)
+	go func() {
+		tx, ok := ctx.Value(TxKey).(pgx.Tx)
+		if ok {
+			rows, err := tx.Query(ctx, q.QueryRow, args...)
+			ch <- resultPair{rows: rows, err: err}
+		}
+
+		rows, err := p.dbc.Query(ctx, q.QueryRow, args...)
+		ch <- resultPair{rows: rows, err: err}
+	}()
+
+	select {
+	case res := <-ch:
+		return res.rows, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (p pg) QueryRowContext(ctx context.Context, q db.Query, args ...interface{}) pgx.Row {
 	logQuery(ctx, q, args...)
-
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
 
 	tx, ok := ctx.Value(TxKey).(pgx.Tx)
 	if ok {
@@ -85,6 +110,21 @@ func (p pg) QueryRowContext(ctx context.Context, q db.Query, args ...interface{}
 	}
 
 	return p.dbc.QueryRow(ctx, q.QueryRow, args...)
+}
+
+func (p pg) QueryRowContextScan(ctx context.Context, dest interface{}, q db.Query, args ...interface{}) error {
+	logQuery(ctx, q, args...)
+
+	return tools.HandleErrorWithContext(
+		ctx, func() error {
+			tx, ok := ctx.Value(TxKey).(pgx.Tx)
+			if ok {
+				return tx.QueryRow(ctx, q.QueryRow, args...).Scan(dest)
+			}
+
+			return p.dbc.QueryRow(ctx, q.QueryRow, args...).Scan(dest)
+		},
+	)
 }
 
 func (p pg) Ping(ctx context.Context) error {
