@@ -39,6 +39,7 @@ type QueryExecutor interface {
 	ExecContext(ctx context.Context, q Query, args ...interface{}) (pgconn.CommandTag, error)
 	QueryContext(ctx context.Context, q Query, args ...interface{}) (pgx.Rows, error)
 	QueryRowContext(ctx context.Context, q Query, args ...interface{}) pgx.Row
+	QueryRowContextScan(ctx context.Context, dest interface{}, q Query, args ...interface{}) error
 }
 
 type SQLExecutor interface {
