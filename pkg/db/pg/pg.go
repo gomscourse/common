@@ -127,6 +127,21 @@ func (p pg) QueryRowContextScan(ctx context.Context, dest interface{}, q db.Quer
 	)
 }
 
+func (p pg) QueryRowContextScanMany(ctx context.Context, dest []interface{}, q db.Query, args ...interface{}) error {
+	logQuery(ctx, q, args...)
+
+	return tools.HandleErrorWithContext(
+		ctx, func() error {
+			tx, ok := ctx.Value(TxKey).(pgx.Tx)
+			if ok {
+				return tx.QueryRow(ctx, q.QueryRow, args...).Scan(dest...)
+			}
+
+			return p.dbc.QueryRow(ctx, q.QueryRow, args...).Scan(dest...)
+		},
+	)
+}
+
 func (p pg) Ping(ctx context.Context) error {
 	return p.dbc.Ping(ctx)
 }
